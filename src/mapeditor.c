@@ -593,7 +593,7 @@ static int convert_map(char *line, void *vinfo, enum SECTION sect, int line_inde
         if (ep->ed->flip == yflip || ep->ed->flip == transpose) y = 384 - y;
         if (ep->ed->flip == invert) {
             int i = 1;
-            long ln_gap = (long)((60.0 / ep->ed->mi->maxbpm) / 4.0 * 1000.0);
+            long ln_gap = (long)((60.0 / ep->ed->mi->maxbpm) / 8.0 * 1000.0);
             int ho_count = (ep->ed->mi->hitobjects.count);
             while (true) {
                 if (line_index == ho_count) {
@@ -640,7 +640,11 @@ static int convert_map(char *line, void *vinfo, enum SECTION sect, int line_inde
 
                 }
 
-                snpedit("%d,%d,%ld,%s,%s,%ld,0:0:0:0:\r\n", x, y, time, "128", hitsoundstr, endtime);
+                if (time >= endtime) {
+                    snpedit("%d,%d,%ld,%s,%s,0:0:0:0:\r\n", x, y, time, "1", hitsoundstr);
+                } else {
+                    snpedit("%d,%d,%ld,%s,%s,%ld,0:0:0:0:\r\n", x, y, time, "128", hitsoundstr, endtime);
+                }
                 free(ho_line_copy);
                 break;
             }
