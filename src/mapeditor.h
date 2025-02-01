@@ -1,5 +1,6 @@
 #pragma once
 #include <stdbool.h>
+#include <stdio.h>
 #include "buffers.h"
 #include "audiospeed.h"
 
@@ -11,12 +12,18 @@ enum SECTION
 
 enum FLIP
 {
-    none, xflip, yflip, transpose
+    none, xflip, yflip, transpose, invert
 };
 
 enum SPEED_MODE
 {
     bpm, rate, guess
+};
+
+struct hitobject_data {
+    char **lines;
+    int count;
+    int capacity;
 };
 
 struct mapinfo
@@ -33,8 +40,11 @@ struct mapinfo
     bool tagexists;
     bool diffexists;
 
+    struct hitobject_data hitobjects;
+
     int read_sections;
 };
+
 
 struct editdata // data needed to edit a map
 {
@@ -48,10 +58,10 @@ struct editdata // data needed to edit a map
     bool pitch;
     bool nospinner;
     enum FLIP flip;
-    
+
     long cut_start;
     long cut_end;
-    
+
     update_progress_cb progress_callback;
     void *data;
 };

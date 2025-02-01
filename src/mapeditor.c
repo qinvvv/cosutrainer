@@ -2,11 +2,13 @@
 #include "tools.h"
 #include "cosuplatform.h"
 #include "actualzip.h"
+#include <stdbool.h>
 #include <stdlib.h>
 #include <limits.h>
 #include <math.h>
 #include <inttypes.h>
 #include <stdarg.h>
+#include <string.h>
 
 #define tkn(x) strtok(x, ",")
 #define nexttkn() strtok(NULL, ",")
@@ -132,7 +134,7 @@ double scale_od(double od, double speed, int mode)
     return (base - ms) / multiplier;
 }
 
-static int loop_map(char *mapfile, int (*func)(char*, void*, enum SECTION), void *pass)
+static int loop_map(char *mapfile, int (*func)(char*, void*, enum SECTION, int), void *pass)
 {
     FILE *source = fopen(mapfile, "r");
     if (!source)
@@ -156,6 +158,7 @@ static int loop_map(char *mapfile, int (*func)(char*, void*, enum SECTION), void
     enum SECTION sect = root;
     enum SECTION newsect = root;
     bool file_end = false;
+    int line_index = 0;
     while (ret == -20 /*loop again*/ || fgets(line, current_size, source))
     {
         sect = newsect;
@@ -196,7 +199,10 @@ static int loop_map(char *mapfile, int (*func)(char*, void*, enum SECTION), void
 
         if (sect != unknown)
         {
-            ret = (*func)(line, pass, sect);
+            if (sect == hitobjects) {
+                line_index++;
+            }
+            ret = (*func)(line, pass, sect, line_index);
             if (ret == -20)
             {
                 // loop again
@@ -219,8 +225,9 @@ static int loop_map(char *mapfile, int (*func)(char*, void*, enum SECTION), void
     return ret;
 }
 
-static int write_mapinfo(char *line, void *vinfo, enum SECTION sect)
+static int write_mapinfo(char *line, void *vinfo, enum SECTION sect, int line_index)
 {
+    (void)line_index;
     struct mapinfo *info = (struct mapinfo*) vinfo;
     if (sect != empty && (info->read_sections & (1 << sect)) == 0)
     {
@@ -361,15 +368,112 @@ static int convert_vaildpath(struct mapinfo *mi)
 }
 #endif
 
+
+static void _add_hitobject_line(struct hitobject_data *hod, const char *line){
+    if (hod->count >= hod->capacity) {
+        int new_capacity = hod->capacity == 0 ? 16 : hod->capacity * 2;
+        char **new_lines = (char**)realloc(hod->lines, new_capacity * sizeof(char*));
+        if (new_lines == NULL) {
+            perror("Failed to reallocate memory for hitobject lines");
+            exit(1);
+        }
+        hod->lines = new_lines;
+        hod->capacity = new_capacity;
+    }
+    int len = strlen(line);
+    char *newline = (char*)malloc(len + 1);
+    if (newline == NULL){
+        perror("Failed to allocate memory for hitobject line");
+        exit(1);
+    }
+    strcpy(newline, line);
+    hod->lines[hod->count++] = newline;
+}
+
+static void free_hitobject_data(struct hitobject_data *hod){
+    if (hod->lines != NULL){
+        for (int i = 0; i < hod->count; i++){
+            free(hod->lines[i]);
+        }
+        free(hod->lines);
+    }
+}
+
+static int _read_hitobjects(FILE *source, struct hitobject_data *hod) {
+    char *line = NULL;
+    ssize_t read;
+    bool in_hitobjects = false;
+    unsigned int current_size = 1024;
+    unsigned int realloc_step = 1024;
+    char *tmpline = NULL;
+    bool file_end = false;
+    line = (char*) malloc(current_size);
+    if (line == NULL) {
+        printerr("Failed allocating memory");
+        return 1;
+    }
+    while (file_end == false || read == -20 )
+    {
+        read = 0;
+        if (fgets(line, current_size, source) == NULL) {
+            file_end = true;
+            read = -1;
+        }
+        if (!file_end && strchr(line, '\n') == NULL) {
+            tmpline = (char*) realloc(line, current_size + realloc_step);
+            if (tmpline == NULL)
+            {
+                printerr("Failed reallocating buffer");
+                free(line);
+                return 1;
+            }
+            line = tmpline;
+            if (fgets(strchr(line, '\0'), realloc_step, source) == NULL) {
+                file_end = true;
+            }
+            current_size += realloc_step;
+            read = -20;
+            continue;
+        }
+
+        if (strncmp(line, "[HitObjects]", 12) == 0) {
+            in_hitobjects = true;
+            continue;
+        }
+        if (in_hitobjects) {
+            _add_hitobject_line(hod, line);
+        }
+    }
+    free(line);
+    if (ferror(source)) return 1;
+    return 0;
+}
+
 struct mapinfo *read_beatmap(char *mapfile)
 {
     struct mapinfo *info = (struct mapinfo*) calloc(1, sizeof(struct mapinfo));
+
+    FILE *source = fopen(mapfile, "r");
+    if (!source) {
+        perror(mapfile);
+        free(info);
+        return NULL;
+    }
+    if (_read_hitobjects(source, &info->hitobjects) != 0) {
+        fclose(source);
+        free(info);
+        return NULL;
+    }
+
+    fseek(source, 0, SEEK_SET);
+
     int ret = loop_map(mapfile, &write_mapinfo, info);
     if (ret == 0)
     {
         info->fullpath = get_realpath(mapfile);
         if (info->fullpath == NULL)
         {
+            free_hitobject_data(&info->hitobjects);
             perror(mapfile);
             free_mapinfo(info);
             return NULL;
@@ -405,7 +509,19 @@ void free_mapinfo(struct mapinfo *info)
     }
 }
 
-static int convert_map(char *line, void *vinfo, enum SECTION sect)
+static bool _cmp_column(char* x1_str, char* x2_str, float columnCount) {
+    int x1 = atoi(x1_str);
+    int x2 = atoi(x2_str);
+
+
+    int c1 = (int)floor((double)x1 * columnCount / 512.0);
+    int c2 = (int)floor((double)x2 * columnCount / 512.0);
+
+    return c1 == c2;
+}
+
+
+static int convert_map(char *line, void *vinfo, enum SECTION sect, int line_index)
 {
     int ret = 0;
     struct editpass *ep = (struct editpass*) vinfo;
@@ -475,8 +591,61 @@ static int convert_map(char *line, void *vinfo, enum SECTION sect)
 
         if (ep->ed->flip == xflip || ep->ed->flip == transpose) x = 512 - x;
         if (ep->ed->flip == yflip || ep->ed->flip == transpose) y = 384 - y;
+        if (ep->ed->flip == invert) {
+            int i = 1;
+            long ln_gap = (long)((60.0 / ep->ed->mi->maxbpm) / 4.0 * 1000.0);
+            int ho_count = (ep->ed->mi->hitobjects.count);
+            while (true) {
+                if (line_index == ho_count) {
+                    i = 0;
+                }
+                char *hitobject_line = ep->ed->mi->hitobjects.lines[line_index+i-1];
+                char *ho_line_copy = strdup(hitobject_line);
 
-        if (type & (1<<3) && ep->ed->nospinner)
+                char *next_xstr = tkn(ho_line_copy);
+                if (next_xstr == NULL) {
+                    free(ho_line_copy);
+                    break;
+                }
+
+                i++;
+                if (!_cmp_column(next_xstr, line, ep->ed->mi->cs) && (line_index+i-1 != ho_count)) {
+                    free(ho_line_copy);
+                    continue;
+                }
+
+                char *next_ystr;
+                fail_nulltkn(next_ystr);
+                char *next_timestr;
+                fail_nulltkn(next_timestr);
+                char *next_typestr;
+                fail_nulltkn(next_typestr);
+                char *hitsoundstr;
+                fail_nulltkn(hitsoundstr);
+                long next_origtime = atol(next_timestr);
+                long next_time = next_origtime / speed;
+                long endtime = next_time - ln_gap;
+
+                if (line_index+i-1 == ho_count) {
+                    char *lastnote = strdup(ep->ed->mi->hitobjects.lines[ho_count-1]);
+                    char *lasttimestr;
+
+                    tkn(lastnote);
+                    nexttkn();
+                    fail_nulltkn(lasttimestr);
+                    long lasttime = atol(lasttimestr) / speed;
+                    endtime = lasttime + ln_gap;
+
+                    free(lastnote);
+
+                }
+
+                snpedit("%d,%d,%ld,%s,%s,%ld,0:0:0:0:\r\n", x, y, time, "128", hitsoundstr, endtime);
+                free(ho_line_copy);
+                break;
+            }
+        }
+        else if (type & (1<<3) && ep->ed->nospinner)
         {
             // do nothing to remove spinner lines
         }
@@ -688,7 +857,7 @@ static int convert_map(char *line, void *vinfo, enum SECTION sect)
                 if (ep->ed->mi->mode != 2 && ep->ed->mi->od != ep->ed->od) snpedit(" OD%.1lf", ep->ed->od);
                 if ((ep->ed->mi->mode != 1 && ep->ed->mi->mode != 3) && ep->ed->mi->ar != ep->ed->ar) snpedit(" AR%.1lf", ep->ed->ar);
             }
-            
+
             if (ep->ed->cut_start > 0 || ep->ed->cut_end < LONG_MAX)
             {
                 putsstr(" Cut:");
@@ -697,7 +866,7 @@ static int convert_map(char *line, void *vinfo, enum SECTION sect)
                     long t = ep->ed->cut_start / 1000;
                     snpedit("%ld:%02ld", t / 60, t % 60);
                 }
-                
+
                 putsstr("~");
 
                 if (ep->ed->cut_end < LONG_MAX)
@@ -717,6 +886,9 @@ static int convert_map(char *line, void *vinfo, enum SECTION sect)
                 break;
             case transpose:
                 putsstr(" TRANSPOSE");
+                break;
+            case invert:
+                putsstr(" FULL LN");
                 break;
             default:
                 break;

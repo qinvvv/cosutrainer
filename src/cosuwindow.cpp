@@ -1,4 +1,5 @@
 #include "cosuwindow.h"
+#include "mapeditor.h"
 #include "tools.h"
 #include "cosuplatform.h"
 #include <cstdio>
@@ -168,7 +169,7 @@ void CosuWindow::convbtn_callb(Fl_Widget *w, void *data)
     }
 
     win->cosuui.mainbox->deactivate();
-    
+
     struct editdata edit;
 
     edit.mi = win->fr.info;
@@ -184,7 +185,7 @@ void CosuWindow::convbtn_callb(Fl_Widget *w, void *data)
     edit.bpmmode = win->cosuui.bpm->value() >= 1 ? bpm : rate;
     edit.pitch = win->cosuui.pitch->value() >= 1;
     edit.nospinner = win->cosuui.nospinner->value() >= 1;
-    
+
     // not supported yet
     edit.cut_start = 0;
     edit.cut_end = LONG_MAX;
@@ -200,16 +201,19 @@ void CosuWindow::convbtn_callb(Fl_Widget *w, void *data)
     case 3:
         edit.flip = transpose;
         break;
+    case 4:
+        edit.flip = invert;
+        break;
     default:
         edit.flip = none;
         break;
     }
-    
+
     edit.data = data;
     edit.progress_callback = update_progress;
 
     edit_beatmap(&edit);
-    
+
     win->cosuui.mainbox->activate();
     win->cosuui.progress->value(0);
 }
@@ -400,7 +404,12 @@ void CosuWindow::start()
 
                 (cosuui.scale_ar)->activate();
             }
-
+            if (info->mode == 3) {
+                (cosuui.invert)->activate();
+            }
+            else {
+                (cosuui.invert)->deactivate();
+            }
             cosuui.songtitlelabel->label(info->songname);
             cosuui.difflabel->label(info->diffname);
             if (bgpath != NULL && tempimg != NULL)
